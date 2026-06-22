@@ -98,25 +98,44 @@ public class DefaultProject implements Project {
 
 	/**
 	 * Constructor for opening a project.
-	 * 
+	 *
 	 * @param projectManager the manager of this project
 	 * @param projectLocator location and name of project
-	 * @param resetOwner if true, set the owner to the current user
+	 * @param resetOwner unused; project ownership is no longer tracked
 	 * @throws FileNotFoundException project directory not found
 	 * @throws IOException if I/O error occurs.
 	 * @throws NotFoundException if project does not exist
-	 * @throws NotOwnerException if userName is not the owner of the project.
+	 * @throws NotOwnerException no longer thrown; project ownership is no longer enforced
 	 * @throws LockException if unable to establish project lock
+	 * @deprecated use {@link #DefaultProject(DefaultProjectManager, ProjectLocator)}; the
+	 * {@code resetOwner} argument is ignored since project ownership is no longer tracked
 	 */
+	@Deprecated
 	protected DefaultProject(DefaultProjectManager projectManager, ProjectLocator projectLocator,
 			boolean resetOwner)
+			throws IOException, NotFoundException, NotOwnerException, LockException {
+		this(projectManager, projectLocator);
+	}
+
+	/**
+	 * Constructor for opening a project.
+	 *
+	 * @param projectManager the manager of this project
+	 * @param projectLocator location and name of project
+	 * @throws FileNotFoundException project directory not found
+	 * @throws IOException if I/O error occurs.
+	 * @throws NotFoundException if project does not exist
+	 * @throws NotOwnerException no longer thrown; project ownership is no longer enforced
+	 * @throws LockException if unable to establish project lock
+	 */
+	protected DefaultProject(DefaultProjectManager projectManager, ProjectLocator projectLocator)
 			throws IOException, NotFoundException, NotOwnerException, LockException {
 
 		this.projectManager = projectManager;
 		this.projectLocator = projectLocator;
 
 		Msg.info(this, "Opening project: " + projectLocator.toString());
-		projectData = new DefaultProjectData(projectLocator, true, resetOwner);
+		projectData = new DefaultProjectData(projectLocator, true);
 		if (!SystemUtilities.isInHeadlessMode()) {
 			toolManager = new ToolManagerImpl(this);
 		}

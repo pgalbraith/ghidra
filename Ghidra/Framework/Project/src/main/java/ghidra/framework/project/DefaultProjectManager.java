@@ -121,9 +121,13 @@ public class DefaultProjectManager implements ProjectManager {
 	}
 
 	@Override
+	@Deprecated
 	public Project openProject(ProjectLocator projectLocator, boolean doRestore, boolean resetOwner)
 			throws NotFoundException, NotOwnerException, LockException, IOException {
 
+		// resetOwner is ignored: project ownership is no longer tracked.  This remains the
+		// concrete implementation of the (deprecated) abstract hook so existing ProjectManager
+		// implementations are not broken; new code should call openProject(locator, doRestore).
 		if (currentProject != null) {
 			String msg = "Current project must be closed before establishing a new active project";
 			Msg.error(this, msg);
@@ -131,7 +135,7 @@ public class DefaultProjectManager implements ProjectManager {
 		}
 
 		try {
-			currentProject = new DefaultProject(this, projectLocator, resetOwner);
+			currentProject = new DefaultProject(this, projectLocator);
 			AppInfo.setActiveProject(currentProject);
 			if (doRestore) {
 				currentProject.restore();

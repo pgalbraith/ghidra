@@ -133,7 +133,7 @@ public class DefaultLocalGhidraProtocolConnector extends GhidraProtocolConnector
 		}
 
 		try {
-			return new DefaultProjectData(localStorageLocator, !readOnlyAccess, false);
+			return new DefaultProjectData(localStorageLocator, !readOnlyAccess);
 		}
 		catch (NotFoundException e) {
 			statusCode = StatusCode.NOT_FOUND;

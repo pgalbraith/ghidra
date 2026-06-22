@@ -28,7 +28,6 @@ import ghidra.framework.model.*;
 import ghidra.framework.protocol.ghidra.GhidraURL;
 import ghidra.framework.remote.User;
 import ghidra.framework.store.*;
-import ghidra.framework.store.FileSystem;
 import ghidra.framework.store.local.LocalFileSystem;
 import ghidra.framework.store.local.LocalFolderItem;
 import ghidra.framework.store.remote.RemoteFileSystem;
@@ -92,7 +91,6 @@ public class DefaultProjectData implements ProjectData {
 	private TaskMonitorAdapter projectDisposalMonitor = new TaskMonitorAdapter();
 
 	private ProjectLock projectLock;
-	private String owner;
 
 	private int inUseCount = 0; // open file count plus active merge sessions
 	private boolean closed = false;
@@ -102,36 +100,41 @@ public class DefaultProjectData implements ProjectData {
 	 * Constructor for existing projects.
 	 * @param localStorageLocator the location of the project
 	 * @param isInWritableProject true if project content is writable, false if project is read-only
-	 * @param resetOwner true to reset the project owner
+	 * @param resetOwner unused; project ownership is no longer tracked
 	 * @throws IOException if an i/o error occurs
 	 * @throws NotFoundException if project does not exist
-	 * @throws NotOwnerException if inProject is true and user is not owner
-	 * @throws LockException if {@code isInWritableProject} is true and unable to establish project 
+	 * @throws NotOwnerException never thrown; project ownership is no longer enforced
+	 * @throws LockException if {@code isInWritableProject} is true and unable to establish project
+	 * write lock (i.e., project in-use)
+	 * @throws FileNotFoundException if project directory not found
+	 * @deprecated use {@link #DefaultProjectData(ProjectLocator, boolean)}; the {@code resetOwner}
+	 * argument is ignored since project ownership is no longer tracked
+	 */
+	@Deprecated
+	public DefaultProjectData(ProjectLocator localStorageLocator, boolean isInWritableProject,
+			boolean resetOwner)
+			throws NotFoundException, NotOwnerException, IOException, LockException {
+		this(localStorageLocator, isInWritableProject);
+	}
+
+	/**
+	 * Constructor for existing projects.
+	 * @param localStorageLocator the location of the project
+	 * @param isInWritableProject true if project content is writable, false if project is read-only
+	 * @throws IOException if an i/o error occurs
+	 * @throws NotFoundException if project does not exist
+	 * @throws NotOwnerException never thrown; project ownership is no longer enforced
+	 * @throws LockException if {@code isInWritableProject} is true and unable to establish project
 	 * write lock (i.e., project in-use)
 	 * @throws FileNotFoundException if project directory not found
 	 */
-	public DefaultProjectData(ProjectLocator localStorageLocator, boolean isInWritableProject,
-			boolean resetOwner)
+	public DefaultProjectData(ProjectLocator localStorageLocator, boolean isInWritableProject)
 			throws NotFoundException, NotOwnerException, IOException, LockException {
 		localStorageLocator.checkProjectExistence();
 		this.localStorageLocator = localStorageLocator;
 		boolean success = false;
 		try {
 			init(false, isInWritableProject);
-			if (resetOwner) {
-				owner = getUserName();
-				properties.putString(OWNER, owner);
-				properties.writeState();
-			}
-			else if (isInWritableProject && !isOwner(owner)) {
-				if (owner == null) {
-					throw new NotOwnerException("Older projects may only be opened as a View.\n" +
-						"You must first create a new project or open an existing current project, \n" +
-						"then use the \"Project->View\" menu action to open the older project as a view.\n" +
-						"You can then drag old files into your active project.");
-				}
-				throw new NotOwnerException("Project is owned by " + owner);
-			}
 
 			synchronized (fileSystem) {
 				getVersionedFileSystem(isInWritableProject);
@@ -189,7 +192,6 @@ public class DefaultProjectData implements ProjectData {
 	DefaultProjectData(LocalFileSystem fileSystem, FileSystem versionedFileSystem)
 			throws IOException {
 		this.localStorageLocator = new ProjectLocator(null, "Test");
-		owner = getUserName();
 		boolean success = false;
 		try {
 			synchronized (fileSystem) {
@@ -221,37 +223,9 @@ public class DefaultProjectData implements ProjectData {
 		}
 	}
 
-	private boolean isOwner(String name) {
-		// Tolerate user name using either the new or old format
-		return SystemUtilities.getUserName().equals(name) || getUserName().equals(name);
-	}
-
-	/**
-	 * Get user name in a format consistent with the older {@link SystemUtilities#getUserName()} 
-	 * implementation.  This is done to ensure we can still recognize the OWNER of older
-	 * projects.
-	 * 
-	 * @return current user name using legacy formatting.
-	 */
-	private String getUserName() {
-		String uname = System.getProperty("user.name");
-
-		// Remove the spaces since some operating systems allow
-		// spaces and some do not, Java's File class doesn't
-		String userName = uname;
-		if (uname.indexOf(" ") >= 0) {
-			userName = "";
-			StringTokenizer tokens = new StringTokenizer(uname, " ", false);
-			while (tokens.hasMoreTokens()) {
-				userName += tokens.nextToken();
-			}
-		}
-		return userName;
-	}
-
 	/**
 	 * Read the contents of the project properties file to include the following values if relevant:
-	 * {@value #OWNER}, {@value #SERVER_NAME}, {@value #REPOSITORY_NAME}, {@value #PORT_NUMBER}
+	 * {@value #SERVER_NAME}, {@value #REPOSITORY_NAME}, {@value #PORT_NUMBER}
 	 * @param projectDir project directory (*.rep)
 	 * @return project properties or null if invalid project directory specified
 	 */
@@ -260,8 +234,6 @@ public class DefaultProjectData implements ProjectData {
 			PropertyFile pf = new PropertyFile(projectDir, PROPERTY_FILENAME);
 			if (pf.exists()) {
 				Properties properties = new Properties();
-
-				properties.setProperty(OWNER, pf.getString(OWNER, null));
 
 				String serverName = pf.getString(SERVER_NAME, null);
 				String repoName = pf.getString(REPOSITORY_NAME, null);
@@ -304,10 +276,13 @@ public class DefaultProjectData implements ProjectData {
 					throw new ReadOnlyException(
 						"Project " + localStorageLocator.getName() + " is read-only");
 				}
-				owner = properties.getString(OWNER, getUserName());
-			}
-			else {
-				owner = "<unknown>"; // Unknown owner
+				// The project owner (embedded user name) is no longer used by Ghidra.  If a
+				// value remains from a project created by an older version, remove it so it is
+				// not retained in the project property file.
+				if (isInWritableProject && properties.getString(OWNER, null) != null) {
+					properties.remove(OWNER);
+					properties.writeState();
+				}
 			}
 		}
 
@@ -323,8 +298,8 @@ public class DefaultProjectData implements ProjectData {
 		this.projectLock = getProjectLock(localStorageLocator, !creatingProject);
 
 		if (!properties.exists()) {
-			owner = getUserName();
-			properties.putString(OWNER, owner);
+			// Create the project property file.  The project owner (user name) is no longer
+			// recorded.
 			properties.writeState();
 		}
 	}
@@ -567,16 +542,6 @@ public class DefaultProjectData implements ProjectData {
 		}
 		userFileSystem = LocalFileSystem.getLocalFileSystem(fileSystemDir.getAbsolutePath(), create,
 			false, !isInWritableProject, true);
-	}
-
-	/**
-	 * Returns the owner of the project that is associated with this 
-	 * DefaultProjectData.  A value of null indicates an old multiuser
-	 * project.
-	 * @return the owner of the project 
-	 */
-	public String getOwner() {
-		return owner;
 	}
 
 	@Override
