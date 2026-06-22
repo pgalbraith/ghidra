@@ -47,8 +47,83 @@ data/manuals directory.
 The index file contains one line per instruction mnemonic or section header.
 Each line of the index file for instruction mnemonics contains two strings:
 the mnemonic and the corresponding instruction info page number in the PDF file in
-its respective section. The instruction mnemonic may only specify the start of a
+its respective section, separated by a comma. Lines beginning with #, ;, or
+// are treated as comments, as are trailing comments preceded by whitespace.
+Blank lines are ignored. The instruction mnemonic may only specify the start of a
 mnemonic if appropriate.  For example a conditional branch instruction may include
 a condition suffix on the mnemonic, but for simplification the suffix may be omitted
 within the index file if all condition cases are handled together (e.g., index could
 have a mnemonic 'B' instead of listing all the condition cases BLT, BGT, BEQ, etc.).
+
+Instruction-mask entries (lines beginning with !) match instructions by opcode bits before
+falling back to mnemonic lookup.  Each entry has two fields:
+
+  !<bit-mask>, <page-number>
+
+The bit-mask selects instruction bits to compare against the leading bytes of the
+instruction.  Supported radices:
+
+  0b  binary: each character is one bit (0/1 or wildcard)
+  0x  hex:    each character is one nibble (0-9, A-F, or wildcard)
+
+Alternate Ghidra/assembly radix markers are also accepted:
+
+  $  hex prefix       (e.g. $ED)
+  %  binary prefix    (e.g. %11101101)
+  h  hex suffix       (e.g. EDh)
+  b  binary suffix    (e.g. 11101101b)
+
+Without a prefix or suffix, a mask containing only 0/1 and wildcards is binary. A mask
+containing any digit 2-9 or A-F is treated as hex. In all radices, X, x, and ? mark don't-care
+positions at the character (bit/nibble) level. Wildcards may appear anywhere in the mask, not
+only at the end. Underscores (_) may separate digit groups. The instruction must contain at
+least as many bits as the mask; shorter instructions never match that mask.
+
+Example:
+
+!0b11101101, 144                ; exact opcode ED
+!0xED, 144                      ; same match in hex
+!ED, 144                        ; same match, unprefixed hex
+!$ED, 144                       ; same match, hex $ prefix
+!%11101101, 144                 ; same match, binary % prefix
+!0xEDxx, 144                    ; ED plus any following byte (two-byte mask)
+!0xEx, 144                      ; high nibble E, low nibble wildcard
+!0b1110xxxx, 144                ; upper nibble 1110 (trailing wildcards)
+!0b01??_0xX1, 144               ; wildcards in the middle (_0x is not a hex prefix under 0b)
+!0x?E?D, 144                    ; fixed E and D nibbles, wildcards between
+!0xED_A0, 144                   ; two-byte ED A0 with separator
+!$30, 144                       ; exact byte 30
+LD, 85
+CALL, 100
+
+If no instruction-mask entry matches, lookup falls back to the mnemonic entries in the index
+file. When multiple instruction-mask entries match, the entry with the most specified
+(non-wildcard) bits wins. If two or more masks tie on specified-bit count, lookup also falls
+back to mnemonic entries and Ghidra logs a warning naming all tied mask entries.
+
+Some examples from the Z80.idx file:
+
+    @UM0080.pdf [Z80 FamilyCPU User Manual, Aug 2016 (UM008011-0816)]
+    LD,                                          85     ; LD r, r' (default fallback for all LD instructions)
+    !%00???110,                                  86     ; LD r, n
+    !%01???110,                                  87     ; LD r, (HL)
+    !%11011101_01???110,                         89     ; LD r, (IX+d)
+    !%11111101_01???110,                         91     ; LD r, (IY+d)
+    !%01110???,                                  93     ; LD (HL), r
+    !%11011101_01110???,                         95     ; LD (IX+d), r
+    !%11111101_01110???,                         97     ; LD (IY+d), r
+    !$36,                                        99     ; LD (HL), n
+    !$DD36,                                     100     ; LD (IX+d), n
+    !$FD36,                                     101     ; LD (IY+d), n
+    RLC,                                        227     ; RLC r (default fallback for all RLC instructions)
+    !$CB06,                                     229     ; RLC (HL)
+    !$DDCB??06,                                 231     ; RLC (IX+d)
+    !$FDCB??06,                                 233     ; RLC (IY+d)
+    BIT,                                        257     ; BIT b, r (default fallback for all BIT instructions)
+    !%11001011_01???110,                        259     ; BIT b, (HL)
+    !%11011101_11001011_????????_01???110,      261     ; BIT b, (IX+d)
+    !%11111101_11001011_????????_01???110,      263     ; BIT b, (IY+d)
+    SET,                                        265     ; SET b, r (default fallback for all SET instructions)
+    !%11001011_11???110,                        267     ; SET b, (HL)
+    !%11011101_11001011_????????_11???110,      269     ; SET b, (IX+d)
+    !%11111101_11001011_????????_11???110,      271     ; SET b, (IY+d)

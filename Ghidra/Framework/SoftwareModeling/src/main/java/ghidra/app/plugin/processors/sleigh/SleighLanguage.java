@@ -102,6 +102,13 @@ public class SleighLanguage implements Language {
 	private List<ContextSetting> ctxsetting = new ArrayList<>();
 	private LinkedHashMap<String, String> properties = new LinkedHashMap<>();
 	private SortedMap<String, ManualEntry> manual = null;
+	/**
+	 * Instruction-mask index entries ({@code !bit-mask page}) in load order. Looked up by linear
+	 * scan (matching mask with the most specified bits wins; equal specified-bit counts fall
+	 * back to mnemonic lookup); not optimized for speed since lookup is only triggered by
+	 * manual UI event.
+	 */
+	private List<Pair<InstructionBitMask, ManualEntry>> instructionMaskManual = null;
 
 	SleighLanguage(SleighLanguageDescription description) throws SleighException {
 		this(description, TaskMonitor.DUMMY);
@@ -1190,9 +1197,98 @@ public class SleighLanguage implements Language {
 	}
 
 	@Override
-	public ManualEntry getManualEntry(String instruction) {
+	public ManualEntry getManualEntry(String instruction, byte[] instructionBytes) {
 		initManual();
 
+		ManualEntry instructionMaskMatch = findInstructionMaskManualEntry(instruction,
+			instructionBytes);
+		if (instructionMaskMatch != null) {
+			return instructionMaskMatch;
+		}
+
+		return findMnemonicManualEntry(instruction);
+	}
+
+	/**
+	 * Look up a manual entry from instruction-mask index lines ({@code !bit-mask page}).
+	 * Fixed {@code 0}/{@code 1} bits in the mask must match the instruction; {@code X},
+	 * {@code x}, and {@code ?} are don't-care bits. When multiple masks match, the mask with
+	 * the most specified (non-wildcard) bits wins. If two or more masks tie on specified-bit
+	 * count, {@code null} is returned so lookup can fall back to mnemonic entries.
+	 */
+	private ManualEntry findInstructionMaskManualEntry(String instruction,
+			byte[] instructionBytes) {
+		if (instructionBytes == null || instructionMaskManual == null) {
+			return null;
+		}
+		List<Pair<InstructionBitMask, ManualEntry>> bestMatches = new ArrayList<>();
+		int maxSpecifiedBits = -1;
+		for (Pair<InstructionBitMask, ManualEntry> maskEntry : instructionMaskManual) {
+			InstructionBitMask bitMask = maskEntry.first;
+			if (!bitMask.matches(instructionBytes)) {
+				continue;
+			}
+			int specifiedBits = bitMask.getSpecifiedBitCount();
+			if (specifiedBits > maxSpecifiedBits) {
+				maxSpecifiedBits = specifiedBits;
+				bestMatches.clear();
+				bestMatches.add(maskEntry);
+			}
+			else if (specifiedBits == maxSpecifiedBits) {
+				bestMatches.add(maskEntry);
+			}
+		}
+		if (bestMatches.size() > 1) {
+			warnTiedInstructionMaskEntries(instruction, instructionBytes, bestMatches);
+			return null;
+		}
+		if (bestMatches.isEmpty()) {
+			return null;
+		}
+		return bestMatches.get(0).second;
+	}
+
+	private void warnTiedInstructionMaskEntries(String instruction, byte[] instructionBytes,
+			List<Pair<InstructionBitMask, ManualEntry>> tiedEntries) {
+		StringBuilder sb = new StringBuilder();
+		sb.append("Ambiguous instruction-mask lookup");
+		if (instruction != null && !instruction.isEmpty()) {
+			sb.append(" for \"").append(instruction).append('"');
+		}
+		sb.append(" (bytes ").append(formatInstructionBytes(instructionBytes));
+		sb.append("): falling back to mnemonic lookup; two or more masks tied: ");
+		for (int i = 0; i < tiedEntries.size(); i++) {
+			if (i > 0) {
+				sb.append(i == tiedEntries.size() - 1 ? " and " : ", ");
+			}
+			appendMaskIndexEntry(sb, tiedEntries.get(i));
+		}
+		Msg.warn(this, sb.toString());
+	}
+
+	private static void appendMaskIndexEntry(StringBuilder sb,
+			Pair<InstructionBitMask, ManualEntry> entry) {
+		sb.append('!').append(entry.first.getMaskText()).append(", ")
+			.append(entry.second.getPageNumber());
+	}
+
+	private static String formatInstructionBytes(byte[] instructionBytes) {
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < instructionBytes.length; i++) {
+			if (i > 0) {
+				sb.append(' ');
+			}
+			sb.append(String.format("0x%02X", instructionBytes[i] & 0xff));
+		}
+		return sb.toString();
+	}
+
+	@Override
+	public ManualEntry getManualEntry(String instruction) {
+		return getManualEntry(instruction, null);
+	}
+
+	private ManualEntry findMnemonicManualEntry(String instruction) {
 		if (instruction == null || instruction.length() == 0) {
 			return manual.get(null);
 		}
@@ -1250,6 +1346,7 @@ public class SleighLanguage implements Language {
 	private void initManual() {
 		if (manual == null) {
 			manual = new TreeMap<>(CASE_INSENSITIVE);
+			instructionMaskManual = new ArrayList<>();
 			try {
 				if (description.getManualIndexFile() != null) {
 					loadIndex(description.getManualIndexFile());
@@ -1262,12 +1359,13 @@ public class SleighLanguage implements Language {
 		}
 	}
 
-	private static final Pattern COMMENT = Pattern.compile("^\\s*#(.*)");
 	private static final Pattern FILE_INCLUDE = Pattern.compile("^\\s*<(.*)");
 	private static final Pattern FILE_SWITCH = Pattern.compile("^\\s*@(.*)");
 	private static final Pattern FILE_SWITCH_WITH_DESCRIPTION =
 		Pattern.compile("^\\s*@(.*)\\[(.*)\\]");
 	private static final Pattern INSTRUCTION = Pattern.compile("\\s*([^,]+)\\s*,\\s*(.+)");
+	private static final Pattern INSTRUCTION_MASK =
+		Pattern.compile("\\s*!(\\S+)\\s*,\\s*(\\d+)\\s*");
 
 	public void loadIndex(ResourceFile processorFile) throws IOException {
 		ResourceFile manualDirectory = processorFile.getParentFile().getCanonicalFile();
@@ -1281,11 +1379,11 @@ public class SleighLanguage implements Language {
 			buff = new BufferedReader(fr);
 			String line;
 			while ((line = buff.readLine()) != null) {
-				Matcher matcher = COMMENT.matcher(line);
-				if (matcher.find()) {
-					continue; // skip comment line
+				line = preprocessManualIndexLine(line);
+				if (line.isEmpty()) {
+					continue;
 				}
-				matcher = FILE_INCLUDE.matcher(line);
+				Matcher matcher = FILE_INCLUDE.matcher(line);
 				if (matcher.find()) {
 					String includeFilePath = matcher.group(1).trim();
 					ResourceFile includedIndexFile =
@@ -1341,17 +1439,28 @@ public class SleighLanguage implements Language {
 							}
 						}
 						else {
-							matcher = INSTRUCTION.matcher(line);
+							matcher = INSTRUCTION_MASK.matcher(line);
 							if (matcher.find()) {
 								if (currentManual == null) {
 									throw new IOException("index file " + processorFile +
 										" does not specify manual first");
 								}
-								String mnemonic = matcher.group(1).trim().toUpperCase();
-								String page = matcher.group(2).trim();
-								ManualEntry entry = new ManualEntry(mnemonic,
-									currentManual.getAbsolutePath(), missingDescription, page);
-								manual.put(mnemonic, entry);
+								addInstructionMaskManualEntry(processorFile, matcher.group(1).trim(),
+									matcher.group(2).trim(), currentManual, missingDescription);
+							}
+							else {
+								matcher = INSTRUCTION.matcher(line);
+								if (matcher.find()) {
+									if (currentManual == null) {
+										throw new IOException("index file " + processorFile +
+											" does not specify manual first");
+									}
+									String mnemonic = matcher.group(1).trim().toUpperCase();
+									String page = matcher.group(2).trim();
+									ManualEntry entry = new ManualEntry(mnemonic,
+										currentManual.getAbsolutePath(), missingDescription, page);
+									manual.put(mnemonic, entry);
+								}
 							}
 						}
 					}
@@ -1369,6 +1478,350 @@ public class SleighLanguage implements Language {
 			if (buff != null) {
 				buff.close();
 			}
+		}
+	}
+
+	/**
+	 * Remove comments and trim a manual index line. Comment delimiters are {@code #},
+	 * {@code ;}, and {@code //}. Blank lines are returned as empty strings.
+	 */
+	private static String preprocessManualIndexLine(String line) {
+		if (line == null) {
+			return "";
+		}
+		line = line.trim();
+		if (line.isEmpty()) {
+			return line;
+		}
+		if (line.startsWith("#") || line.startsWith(";") || line.startsWith("//")) {
+			return "";
+		}
+		int commentStart = findInlineCommentStart(line);
+		if (commentStart >= 0) {
+			line = line.substring(0, commentStart).trim();
+		}
+		return line;
+	}
+
+	private static int findInlineCommentStart(String line) {
+		for (int i = 0; i < line.length(); i++) {
+			if (line.startsWith("//", i)) {
+				return i;
+			}
+			char c = line.charAt(i);
+			if ((c == '#' || c == ';') && (i == 0 || Character.isWhitespace(line.charAt(i - 1)))) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private void addInstructionMaskManualEntry(ResourceFile processorFile, String maskText,
+			String pageStr, ResourceFile currentManual, String missingDescription)
+			throws IOException {
+		if (currentManual == null) {
+			throw new IOException("index file " + processorFile + " does not specify manual first");
+		}
+		InstructionBitMask bitMask;
+		try {
+			bitMask = new InstructionBitMask(parseInstructionBitMask(maskText), maskText);
+		}
+		catch (IOException e) {
+			Msg.warn(this, "Unable to parse instruction bit-mask \"" + maskText +
+				"\" in index file " + processorFile + ": " + e.getMessage(), e);
+			return;
+		}
+		ManualEntry entry = new ManualEntry(null, currentManual.getAbsolutePath(),
+			missingDescription, pageStr);
+		instructionMaskManual.add(new Pair<>(bitMask, entry));
+	}
+
+	/**
+	 * Parse a bit-mask from a manual index file. Supported radices:
+	 * <ul>
+	 * <li>{@code 0b} binary: each character is one bit ({@code 0}/{@code 1} or wildcard)</li>
+	 * <li>{@code 0x} hex: each character is one nibble ({@code 0-9A-Fa-f} or wildcard)</li>
+	 * <li>{@code $} hex and {@code %} binary assembly-style prefixes</li>
+	 * <li>{@code h} and {@code b} Ghidra-style hex/binary suffixes</li>
+	 * </ul>
+	 * Without a prefix or suffix, masks containing only {@code 0}/{@code 1} and wildcards are
+	 * binary; masks containing any digit {@code 2-9} or {@code A-F} are hex. {@code _} may
+	 * separate digit groups. Wildcards ({@code X}, {@code x}, {@code ?}) may appear anywhere in
+	 * the mask, not only at the end. The instruction must contain at least as many bits as the
+	 * mask; shorter instructions never match that mask. Bits are matched MSB-first against the
+	 * leading instruction bytes.
+	 */
+	private static InstructionBitMask parseInstructionBitMask(String maskText) throws IOException {
+		Pair<InstructionMaskRadix, String> radixAndBody = detectInstructionMaskRadix(maskText);
+		InstructionMaskRadix radix = radixAndBody.first;
+		String s = radixAndBody.second.replace("_", "");
+		if (s.isEmpty()) {
+			throw new IOException("empty instruction bit-mask");
+		}
+		return switch (radix) {
+			case BINARY -> parseBinaryInstructionMask(s);
+			case HEX -> parseHexInstructionMask(s);
+		};
+	}
+
+	private enum InstructionMaskRadix {
+		BINARY, HEX
+	}
+
+	/**
+	 * Detect the radix of a bit-mask and return the mask body with any radix prefix or suffix
+	 * removed.
+	 */
+	private static Pair<InstructionMaskRadix, String> detectInstructionMaskRadix(String maskText)
+			throws IOException {
+		String s = maskText.trim();
+		if (s.isEmpty()) {
+			throw new IOException("empty instruction bit-mask");
+		}
+		if (startsWithIgnoreCase(s, "0b")) {
+			return new Pair<>(InstructionMaskRadix.BINARY, s.substring(2));
+		}
+		if (startsWithIgnoreCase(s, "0x")) {
+			return new Pair<>(InstructionMaskRadix.HEX, s.substring(2));
+		}
+		if (s.startsWith("$")) {
+			return new Pair<>(InstructionMaskRadix.HEX, s.substring(1));
+		}
+		if (s.startsWith("%")) {
+			return new Pair<>(InstructionMaskRadix.BINARY, s.substring(1));
+		}
+		if (s.startsWith("&") || startsWithIgnoreCase(s, "0o")) {
+			throw new IOException("octal instruction bit-mask is not supported: " + maskText);
+		}
+		String lower = s.toLowerCase();
+		if (lower.endsWith("h") && s.length() > 1) {
+			return new Pair<>(InstructionMaskRadix.HEX, s.substring(0, s.length() - 1));
+		}
+		if (lower.endsWith("o") && s.length() > 1) {
+			throw new IOException("octal instruction bit-mask is not supported: " + maskText);
+		}
+		if (lower.endsWith("b") && s.length() > 1) {
+			return new Pair<>(InstructionMaskRadix.BINARY, s.substring(0, s.length() - 1));
+		}
+		return detectUnprefixedInstructionMaskRadix(s);
+	}
+
+	private static boolean startsWithIgnoreCase(String s, String prefix) {
+		return s.regionMatches(true, 0, prefix, 0, prefix.length());
+	}
+
+	/**
+	 * Infer binary vs hex for a mask with no radix prefix or suffix. Masks containing only
+	 * {@code 0}/{@code 1} (plus wildcards and separators) are binary; any digit {@code 2-9} or
+	 * {@code A-F} selects hex.
+	 */
+	private static Pair<InstructionMaskRadix, String> detectUnprefixedInstructionMaskRadix(
+			String maskText) throws IOException {
+		boolean hex = false;
+		for (int i = 0; i < maskText.length(); i++) {
+			char c = maskText.charAt(i);
+			if (c == '_' || isInstructionMaskWildcard(c) || c == '0' || c == '1') {
+				continue;
+			}
+			if (c >= '2' && c <= '9') {
+				hex = true;
+				continue;
+			}
+			if ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				hex = true;
+				continue;
+			}
+			throw new IOException("invalid character in instruction bit-mask: " + c);
+		}
+		return new Pair<>(hex ? InstructionMaskRadix.HEX : InstructionMaskRadix.BINARY, maskText);
+	}
+
+	private static boolean isInstructionMaskWildcard(char c) {
+		return c == 'X' || c == 'x' || c == '?';
+	}
+
+	private static InstructionBitMask parseBinaryInstructionMask(String s) throws IOException {
+		BitMaskBuilder builder = BitMaskBuilder.withCapacity(s.length());
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c == '0') {
+				builder.appendFixedBit(false);
+			}
+			else if (c == '1') {
+				builder.appendFixedBit(true);
+			}
+			else if (isInstructionMaskWildcard(c)) {
+				builder.appendWildcardBit();
+			}
+			else {
+				throw new IOException("invalid character in binary instruction bit-mask: " + c);
+			}
+		}
+		return builder.build();
+	}
+
+	private static InstructionBitMask parseHexInstructionMask(String s) throws IOException {
+		BitMaskBuilder builder = BitMaskBuilder.withCapacity(s.length() * 4);
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (isInstructionMaskWildcard(c)) {
+				builder.appendWildcardNibble();
+			}
+			else {
+				builder.appendFixedNibble(parseHexMaskDigit(c));
+			}
+		}
+		return builder.build();
+	}
+
+	private static int parseHexMaskDigit(char c) throws IOException {
+		if (c >= '0' && c <= '9') {
+			return c - '0';
+		}
+		if (c >= 'A' && c <= 'F') {
+			return c - 'A' + 10;
+		}
+		if (c >= 'a' && c <= 'f') {
+			return c - 'a' + 10;
+		}
+		throw new IOException("invalid hex digit in instruction bit-mask: " + c);
+	}
+
+	private static final class BitMaskBuilder {
+		private byte[] value;
+		private byte[] careMask;
+		private int bitLength;
+
+		private BitMaskBuilder(int capacityBits) {
+			int numBytes = (capacityBits + 7) / 8;
+			value = new byte[numBytes];
+			careMask = new byte[numBytes];
+		}
+
+		private static BitMaskBuilder withCapacity(int capacityBits) {
+			return new BitMaskBuilder(Math.max(capacityBits, 1));
+		}
+
+		private void appendFixedBit(boolean one) {
+			setBit(bitLength++, true, one);
+		}
+
+		private void appendWildcardBit() {
+			bitLength++;
+		}
+
+		private void appendFixedNibble(int nibble) {
+			appendFixedBits(4, nibble);
+		}
+
+		private void appendWildcardNibble() {
+			bitLength += 4;
+		}
+
+		private void appendFixedBits(int numBits, int bits) {
+			for (int i = 0; i < numBits; i++) {
+				boolean one = ((bits >> (numBits - 1 - i)) & 1) != 0;
+				setBit(bitLength++, true, one);
+			}
+		}
+
+		private void setBit(int bitIndex, boolean care, boolean one) {
+			ensureCapacity(bitIndex + 1);
+			int byteIndex = bitIndex / 8;
+			int bitPos = 7 - (bitIndex % 8);
+			if (care) {
+				careMask[byteIndex] |= (1 << bitPos);
+				if (one) {
+					value[byteIndex] |= (1 << bitPos);
+				}
+			}
+		}
+
+		private void ensureCapacity(int requiredBits) {
+			int requiredBytes = (requiredBits + 7) / 8;
+			if (requiredBytes <= value.length) {
+				return;
+			}
+			value = Arrays.copyOf(value, requiredBytes);
+			careMask = Arrays.copyOf(careMask, requiredBytes);
+		}
+
+		private InstructionBitMask build() {
+			int numBytes = (bitLength + 7) / 8;
+			return new InstructionBitMask(Arrays.copyOf(value, numBytes),
+				Arrays.copyOf(careMask, numBytes), bitLength);
+		}
+	}
+
+	private static final class InstructionBitMask {
+		private final byte[] value;
+		private final byte[] careMask;
+		private final int bitLength;
+		private final int specifiedBitCount;
+		private final String maskText;
+
+		private InstructionBitMask(byte[] value, byte[] careMask, int bitLength) {
+			this(value, careMask, bitLength, null);
+		}
+
+		private InstructionBitMask(InstructionBitMask parsed, String maskText) {
+			this(parsed.value, parsed.careMask, parsed.bitLength, maskText);
+		}
+
+		private InstructionBitMask(byte[] value, byte[] careMask, int bitLength,
+				String maskText) {
+			this.value = value;
+			this.careMask = careMask;
+			this.bitLength = bitLength;
+			this.maskText = maskText;
+			this.specifiedBitCount = countSpecifiedBits(careMask, bitLength);
+		}
+
+		private static int countSpecifiedBits(byte[] careMask, int bitLength) {
+			int count = 0;
+			for (int i = 0; i < bitLength; i++) {
+				int byteIndex = i / 8;
+				int bitPos = 7 - (i % 8);
+				if (((careMask[byteIndex] >> bitPos) & 1) != 0) {
+					count++;
+				}
+			}
+			return count;
+		}
+
+		private int getBitLength() {
+			return bitLength;
+		}
+
+		private int getSpecifiedBitCount() {
+			return specifiedBitCount;
+		}
+
+		private String getMaskText() {
+			return maskText;
+		}
+
+		private boolean matches(byte[] instructionBytes) {
+			if (bitLength == 0) {
+				return true;
+			}
+			if (instructionBytes.length * 8 < bitLength) {
+				return false;
+			}
+			for (int i = 0; i < bitLength; i++) {
+				int byteIndex = i / 8;
+				int bitPos = 7 - (i % 8);
+				int careBit = (careMask[byteIndex] >> bitPos) & 1;
+				if (careBit == 0) {
+					continue;
+				}
+				int instrBit = (instructionBytes[byteIndex] >> bitPos) & 1;
+				int valueBit = (value[byteIndex] >> bitPos) & 1;
+				if (instrBit != valueBit) {
+					return false;
+				}
+			}
+			return true;
 		}
 	}
 

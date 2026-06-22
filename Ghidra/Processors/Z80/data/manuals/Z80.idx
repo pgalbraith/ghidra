@@ -1,9 +1,51 @@
 @UM0080.pdf [Z80 FamilyCPU User Manual, Aug 2016 (UM008011-0816)]
 LD, 85
+!%00???110,                                  86     ; LD r, n
+!%01???110,                                  87     ; LD r, (HL)
+!%11011101_01???110,                         89     ; LD r, (IX+d)
+!%11111101_01???110,                         91     ; LD r, (IY+d)
+!%01110???,                                  93     ; LD (HL), r
+!%11011101_01110???,                         95     ; LD (IX+d), r
+!%11111101_01110???,                         97     ; LD (IY+d), r
+!$36,                                        99     ; LD (HL), n
+!$DD36,                                     100     ; LD (IX+d), n
+!$FD36,                                     101     ; LD (IY+d), n
+!$0A,                                       102     ; LD A, (BC)
+!$1A,                                       103     ; LD A, (DE)
+!$3A,                                       104     ; LD A, (nn)
+!$02,                                       105     ; LD (BC), A
+!$12,                                       106     ; LD (DE), A
+!$32,                                       107     ; LD (nn), A
+!$ED57,                                     108     ; LD A, I
+!$ED5F,                                     109     ; LD A, R
+!$ED47,                                     110     ; LD I, A
+!$ED4F,                                     111     ; LD R, A
+!%00??0001,                                 113     ; LD dd, nn
+!$DD21,                                     114     ; LD IX, nn
+!$FD21,                                     115     ; LD IY, nn
+!$2A,                                       116     ; LD HL, (nn)
+!%11101101_01??1011,                        117     ; LD dd, (nn)
+!$DD2A,                                     119     ; LD IX, (nn)
+!$FD2A,                                     120     ; LD IY, (nn)
+!$22,                                       121     ; LD (nn), HL
+!%11101101_01??0011,                        122     ; LD (nn), dd
+!$DD22,                                     124     ; LD (nn), IX
+!$FD22,                                     125     ; LD (nn), IY
+!$F9,                                       126     ; LD SP, HL
+!$DDF9,                                     127     ; LD SP, IX
+!$FDF9,                                     128     ; LD SP, IY
 PUSH, 129
+!$DDE5,                                     131     ; PUSH IX
+!$FDE5,                                     132     ; PUSH IY
 POP, 133
+!$DDE1,                                     135     ; POP IX
+!$FDE1,                                     136     ; POP IY
 EX, 138
+!$08,                                       139     ; EX AF, AF'
 EXX, 140
+!$E3,                                       141     ; EX (SP), HL
+!$DDE3,                                     142     ; EX (SP), IX
+!$FDE3,                                     143     ; EX (SP), IY
 LDI, 144
 LDIR, 146
 LDD, 148
@@ -13,6 +55,10 @@ CPIR, 153
 CPD, 155
 CPDR, 156
 ADD, 159
+!$C6,                                       161     ; ADD A, n
+!$86,                                       162     ; ADD A, (HL)
+!$DD86,                                     163     ; ADD A, (IX+d)
+!$FD86,                                     164     ; ADD A, (IY+d)
 ADC, 165
 SUB, 167
 SBC, 169
@@ -21,6 +67,9 @@ OR, 173
 XOR, 175
 CP, 177
 INC, 179
+!$34,                                       181     ; INC (HL)
+!$DD34,                                     182     ; INC (IX+d)
+!$FD34,                                     183     ; INC (IY+d)
 DEC, 184
 DAA, 187
 CPL, 189
@@ -32,11 +81,27 @@ HALT, 195
 DI, 196
 EI, 197
 IM, 198
+!$ED56,                                     199     ; IM 1
+!$ED5E,                                     200     ; IM 2
+!%00??1001,                                 202     ; ADD HL, ss
+!%11101101_01??1010,                        204     ; ADC HL, ss
+!%11101101_01??0010,                        206     ; SBC HL, ss
+!%11011101_00??1001,                        208     ; ADD IX, pp
+!%11111101_00??1001,                        210     ; ADD IY, rr
+!%00??0011,                                 212     ; INC ss
+!$DD23,                                     213     ; INC IX
+!$FD23,                                     214     ; INC IY
+!%00??1011,                                 215     ; DEC ss
+!$DD2B,                                     216     ; DEC IX
+!$FD2B,                                     217     ; DEC IY
 RLCA, 219
 RLA, 221
 RRCA, 223
 RRA, 225
 RLC, 227
+!$CB06,                                     229     ; RLC (HL)
+!$DDCB??06,                                 231     ; RLC (IX+d)
+!$FDCB??06,                                 233     ; RLC (IY+d)
 RL, 235
 RRC, 238
 RR, 241
@@ -46,22 +111,40 @@ SRL, 250
 RLD, 252
 RRD, 254
 BIT, 257
+!%11001011_01???110,                        259     ; BIT b, (HL)
+!%11011101_11001011_????????_01???110,      261     ; BIT b, (IX+d)
+!%11111101_11001011_????????_01???110,      263     ; BIT b, (IY+d)
 SET, 265
+!%11001011_11???110,                        267     ; SET b, (HL)
+!%11011101_11001011_????????_11???110,      269     ; SET b, (IX+d)
+!%11111101_11001011_????????_11???110,      271     ; SET b, (IY+d)
 RES, 273
 JP, 276
+!%11???010,                                 277     ; JP cc, nn
 JR, 279
+!$38,                                       281     ; JR C, e
+!$30,                                       283     ; JR NC, e
+!$28,                                       285     ; JR Z, e
+!$20,                                       287     ; JR NZ, e
+!$E9,                                       289     ; JP (HL)
+!$DDE9,                                     290     ; JP (IX)
+!$FDE9,                                     291     ; JP (IY)
 DJNZ, 292
 CALL, 295
+!%11???100,                                 297     ; CALL cc, nn
 RET, 299
+!%11???000,                                 300     ; RET cc
 RETI, 302
 RETN, 304
 RST, 306
 IN, 309
+!%11101101_01???000,                        310     ; IN r, (C)
 INI, 312
 INIR, 314
 IND, 316
 INDR, 318
 OUT, 320
+!%11101101_01???001,                        321     ; OUT (C), r
 OUTI, 323
 OTIR, 325
 OUTD, 327

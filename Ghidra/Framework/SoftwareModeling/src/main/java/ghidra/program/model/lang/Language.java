@@ -397,6 +397,21 @@ public interface Language {
 	public ManualEntry getManualEntry(String instructionMnemonic);
 
 	/**
+	 * Get the ManualEntry for the given instruction mnemonic and opcode bytes.
+	 * If we can't find a match based on the machine opcode bytes than we'll 
+	 * try to find the manual entry based on the instruction mnemonic, instead. 
+	 * 
+	 * @param instructionMnemonic the instruction mnemonic
+	 * @param instructionBytes    the parsed instruction bytes, or null to skip
+	 *                            instruction-mask lookup
+	 * @return the ManualEntry or null. A default manual entry will be returned if
+	 *         an instruction can not be found within the index and a manual exists.
+	 */
+	default ManualEntry getManualEntry(String instructionMnemonic, byte[] instructionBytes) {
+		return getManualEntry(instructionMnemonic);
+	}
+
+	/**
 	 * Returns a read-only set view of the instruction mnemonic keys defined on
 	 * this language.
 	 * 
