@@ -48,6 +48,7 @@ import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.lang.Language;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.util.FunctionSignatureFieldLocation;
 import ghidra.program.util.ProgramLocation;
 import ghidra.util.*;
@@ -266,7 +267,18 @@ public class ShowInstructionInfoPlugin extends ProgramPlugin {
 			mnemonicString = mnemonicString.substring(1);
 		}
 
-		ManualEntry entry = language.getManualEntry(mnemonicString);
+		byte[] instructionBytes = null;
+		if (instruction != null) {
+			try {
+				instructionBytes = instruction.getParsedBytes();
+			}
+			catch (MemoryAccessException e) {
+				Msg.warn(this, "Unable to read instruction bytes for manual lookup at " +
+					instruction.getAddress() + "; falling back to mnemonic lookup", e);
+			}
+		}
+
+		ManualEntry entry = language.getManualEntry(mnemonicString, instructionBytes);
 		if (entry != null) {
 			return entry;
 		}
