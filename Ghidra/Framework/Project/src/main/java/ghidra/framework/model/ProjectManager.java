@@ -106,14 +106,37 @@ public interface ProjectManager {
 	 * to the list of known projects.
 	 * @param projectLocator project location
 	 * @param doRestore true if the project should be restored
-	 * @param resetOwner if true, the owner of the project will be changed to the current user.
 	 * @return opened project
 	 * @throws NotFoundException if the file for the project was
 	 * not found.
-	 * @throws NotOwnerException if the project owner is not the user
+	 * @throws NotOwnerException no longer thrown; project ownership is no longer enforced
 	 * @throws LockException if the project is already opened by another user
 	 * @throws IOException if there was an IO-related error
 	 */
+	@SuppressWarnings("deprecation")
+	public default Project openProject(ProjectLocator projectLocator, boolean doRestore)
+			throws NotFoundException, NotOwnerException, LockException, IOException {
+		return openProject(projectLocator, doRestore, false);
+	}
+
+	/**
+	 * Open a project from the file system. Add the project url
+	 * to the list of known projects.
+	 * @param projectLocator project location
+	 * @param doRestore true if the project should be restored
+	 * @param resetOwner unused; project ownership is no longer tracked
+	 * @return opened project
+	 * @throws NotFoundException if the file for the project was
+	 * not found.
+	 * @throws NotOwnerException no longer thrown; project ownership is no longer enforced
+	 * @throws LockException if the project is already opened by another user
+	 * @throws IOException if there was an IO-related error
+	 * @deprecated implement and call {@link #openProject(ProjectLocator, boolean)} instead; the
+	 * {@code resetOwner} argument is ignored since project ownership is no longer tracked.  This
+	 * method remains the abstract hook so that existing {@code ProjectManager} implementations are
+	 * not broken.
+	 */
+	@Deprecated
 	public Project openProject(ProjectLocator projectLocator, boolean doRestore, boolean resetOwner)
 			throws NotFoundException, NotOwnerException, LockException, IOException;
 

@@ -176,7 +176,7 @@ class RestoreTask extends AbstractFileExtractorTask {
 					tool.setActiveProject(project);
 				}
 				catch (NotOwnerException e) {
-					// can't happen since resetOwner is true
+					// can't happen; project ownership is no longer enforced
 				}
 				catch (Exception e) {
 					Msg.info(this,

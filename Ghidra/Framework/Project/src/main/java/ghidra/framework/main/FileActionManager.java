@@ -255,7 +255,7 @@ class FileActionManager {
 				return true;
 			}
 			ProjectManager pm = plugin.getProjectManager();
-			project = pm.openProject(projectLocator, true, false);
+			project = pm.openProject(projectLocator, true);
 			firingProjectOpened = true;
 			tool.setActiveProject(project);
 			openProjectAndNotify(project);
